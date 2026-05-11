@@ -436,19 +436,26 @@
     if (wakeLock !== null) wakeLock.release().then(() => { wakeLock = null; });
   }
 
+  // 1️⃣ 修改：強制降低攝影機與螢幕分享的解析度為 240p
   async function acquireStream() {
     if (currentStream) currentStream.getTracks().forEach(track => track.stop());
     const constraints = { audio: true };
     try {
       if (isMobile) {
-        constraints.video = { facingMode: mobileFacingMode, width: { ideal: 1280 }, height: { ideal: 720 } };
+        // 手機版：設定為極低解析度 (約 240p)
+        constraints.video = { facingMode: mobileFacingMode, width: { ideal: 426 }, height: { ideal: 240 } };
         currentStream = await navigator.mediaDevices.getUserMedia(constraints);
       } else {
         if (desktopSource === "camera") {
-          constraints.video = { width: { ideal: 1280 }, height: { ideal: 720 } };
+          // 電腦鏡頭：設定為 240p (426x240)
+          constraints.video = { width: { ideal: 426 }, height: { ideal: 240 } };
           currentStream = await navigator.mediaDevices.getUserMedia(constraints);
         } else {
-          currentStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          // 螢幕分享：同樣限制畫面大小
+          currentStream = await navigator.mediaDevices.getDisplayMedia({ 
+            video: { width: { ideal: 854 }, height: { ideal: 480 } }, // 螢幕分享保留稍微大一點點(480p)以防文字糊掉，但仍比之前小很多
+            audio: true 
+          });
           currentStream.getVideoTracks()[0].onended = () => {
             if (isRecording) {
               log("[系統] 畫面分享中斷，切回視訊鏡頭");
@@ -469,24 +476,35 @@
     }
   }
 
-  async function switchSourceAction() {
-    const wasRecording = isRecording;
-    if (wasRecording && mediaRecorder && mediaRecorder.state === "recording") {
-      log("[系統] 切換畫面中...");
-      mediaRecorder.stop(); 
-      clearTimeout(chunkInterval);
-    }
-    if (isMobile) mobileFacingMode = (mobileFacingMode === "user") ? "environment" : "user";
-    else desktopSource = (desktopSource === "camera") ? "screen" : "camera";
-    try {
-      await acquireStream();
-      if (wasRecording && !isPaused) {
-        log("[成功] 畫面切換完成，繼續錄製");
-        startChunkRecording();
+  // 2️⃣ 修改：加入超低位元率 (Bitrate) 壓縮設定，讓檔案極度輕量化
+  function startChunkRecording() {
+    if (!isRecording || !currentStream || isPaused) return; 
+    let recordedChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
+    
+    // 🌟 關鍵優化：設定超低位元率，大幅縮小每分鐘的檔案體積
+    const options = { 
+      mimeType: mimeType,
+      videoBitsPerSecond: 250000, // 影像位元率降至 250 kbps (非常輕量，專供 AI 辨識)
+      audioBitsPerSecond: 64000   // 聲音位元率降至 64 kbps (足以清楚辨識人聲逐字稿)
+    };
+    
+    mediaRecorder = new MediaRecorder(currentStream, options);
+    
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      if (recordedChunks.length > 0) {
+        const blob = new Blob(recordedChunks, { type: mimeType });
+        processAndUploadChunk(blob, mimeType, chunkIndex);
+        chunkIndex++;
       }
-    } catch (e) {
-      log("[錯誤] 切換失敗，請確認權限");
-    }
+      if (isRecording && !isPaused) startChunkRecording(); 
+    };
+
+    try {
+      mediaRecorder.start();
+      chunkInterval = setTimeout(() => { if (mediaRecorder.state === "recording") mediaRecorder.stop(); }, 60000); 
+    } catch (err) {}
   }
 
   function toggleVideo() {
