@@ -437,6 +437,7 @@
   }
 
   // 1️⃣ 修改：【防彈級】全方位智慧設備與螢幕分享捕捉引擎
+  // 1️⃣ 修改：【極致流暢版】全方位智慧設備與螢幕分享捕捉引擎
   async function acquireStream() {
     if (currentStream) {
       currentStream.getTracks().forEach(track => track.stop());
@@ -460,14 +461,14 @@
           currentStream = await navigator.mediaDevices.getUserMedia(constraints);
           
         } else {
-          // 🖥️ 【電腦螢幕分享模式】：極致優化版 (高清晰文字 + 必備麥克風)
+          // 🖥️ 【電腦螢幕分享模式】：解除 fps 封印，極致流暢預覽 + 必備麥克風
           if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
             throw new Error("您的瀏覽器不支援螢幕分享功能");
           }
 
-          // 步驟 A：抓取螢幕畫面
+          // 步驟 A：抓取螢幕畫面 (🌟 關鍵修改：移除 frameRate 限制，讓畫面恢復 30/60fps 超順暢顯示！)
           const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
-            video: { frameRate: { ideal: 5, max: 10 } },
+            video: true, // 解放封印，瀏覽器會自動給予最順暢的畫面
             audio: true 
           });
           
