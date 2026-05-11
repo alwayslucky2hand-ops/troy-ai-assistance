@@ -465,9 +465,9 @@
             throw new Error("您的瀏覽器不支援螢幕分享功能");
           }
 
-          // 步驟 A：抓取螢幕畫面 (🌟 關鍵修改：移除 frameRate 限制，讓畫面恢復 30/60fps 超順暢顯示！)
+          // 步驟 A：抓取螢幕畫面
           const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
-            video: true, // 解放封印，瀏覽器會自動給予最順暢的畫面
+            video: true, 
             audio: true 
           });
           
@@ -587,20 +587,19 @@
     }
   }
 
-  // 3️⃣ 保留：動態智慧位元率 (Bitrate) 控制
+  // 3️⃣ 🌟核心優化：大幅提升收音品質，稍微降低影像負載以緩解網路塞車
   function startChunkRecording() {
     if (!isRecording || !currentStream || isPaused) return; 
     let recordedChunks = [];
     const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
     
-    // 🌟 智慧動態位元率判斷
-    // 如果是電腦螢幕分享，因為需要看清楚「文字」，給予較高位元率 (搭配前面的 5fps，檔案依然很小，傳輸依然極快！)
-    // 如果是一般鏡頭，只需看清楚「人臉與動作」，使用超低位元率 (250kbps) 節省頻寬
     const isScreenSharing = (!isMobile && desktopSource === "screen");
     const options = { 
       mimeType: mimeType,
-      videoBitsPerSecond: isScreenSharing ? 800000 : 250000, 
-      audioBitsPerSecond: 64000  
+      // 稍微調降一點影像負載，把頻寬讓給聲音，避免雙軌同步時瀏覽器塞車
+      videoBitsPerSecond: isScreenSharing ? 500000 : 150000, 
+      // 🌟 核心提升：將聲音位元率從 64000 翻倍提升到 128000，讓 AI 聽得一清二楚！
+      audioBitsPerSecond: 128000  
     };
     
     mediaRecorder = new MediaRecorder(currentStream, options);
@@ -623,7 +622,6 @@
 
   function toggleVideo() {
     if (currentStream) {
-      // 安全地檢查是否真的有軌道，不再報錯死機
       if (typeof currentStream.getVideoTracks === 'function') {
         const videoTracks = currentStream.getVideoTracks();
         if (videoTracks && videoTracks.length > 0) {
@@ -644,7 +642,7 @@
   }
 
   // ------------------------------------------
-  // ✨ 優化版：歷史紀錄調閱邏輯 (零報錯)
+  // ✨ 歷史紀錄調閱邏輯 (零報錯)
   // ------------------------------------------
   function loadHistoryView() {
     document.getElementById('historyEmail').value = document.getElementById('setupEmail').value;
@@ -664,11 +662,9 @@
     try {
       const res = await callGasAPI({ action: "fetchHistory", email: email });
       if (res.status === 'success' && res.data.length > 0) {
-        // 🌟 將資料存入全域陣列，不直接放入 HTML
         globalHistoryData = res.data;
         let html = '';
         
-        // 🌟 點擊時只傳遞陣列的「數字編號 (index)」，絕不會發生引號衝突錯誤
         globalHistoryData.forEach((item, index) => {
           html += `
             <div class="history-card" onclick="loadHistoryItem(${index})">
@@ -693,7 +689,6 @@
     lucide.createIcons();
   }
 
-  // 🌟 透過 Index 編號提取記憶體資料
   function loadHistoryItem(index) {
     const item = globalHistoryData[index];
     
@@ -707,18 +702,16 @@
   }
 
   // ------------------------------------------
-  // ✨ 極致排版引擎 (消除所有 Markdown，按鈕化網址)
+  // ✨ 極致排版引擎
   // ------------------------------------------
   function renderBeautifulText(rawSummary, rawDetails, videoUrls) {
     rawSummary = rawSummary || "";
     rawDetails = rawDetails || "";
     videoUrls = videoUrls || "無影音檔案紀錄";
     
-    // 🌟 在背景將最完整的原始資料保存起來，防止匯出文件時遺失字元與原始網址！
     window.rawMeetingDetails = rawDetails;
     window.rawVideoUrls = videoUrls;
 
-    // 徹底替換所有的 Markdown，轉換為 HTML 標籤與行內樣式供畫面上看
     let formattedSummary = rawSummary
       .replace(/###\s*(.*?)(?=\n|$)/g, "<h3 style='color: var(--primary); font-size: 16px; font-weight: 700; margin-top: 24px; margin-bottom: 12px;'>$1</h3>")
       .replace(/【(.*?)】/g, "<h3 style='color: var(--primary); font-size: 16px; font-weight: 700; margin-top: 24px; margin-bottom: 12px;'>$1</h3>")
@@ -733,13 +726,11 @@
       .replace(/^\*\s+(.*)/gm, "<div style='padding-left: 16px; position: relative; margin-bottom: 6px; font-size: 13.5px;'><span style='position: absolute; left: 0; color: var(--text-muted);'>•</span>$1</div>")
       .replace(/\n/g, "<br>");
 
-    // 🌟 將原始網址轉換成漂亮的前端按鈕
     let videoButtonsHtml = "";
     if (videoUrls && videoUrls !== "無影音檔案紀錄" && videoUrls.trim() !== "") {
       const urls = videoUrls.split(/,\s*|\n+/);
       urls.forEach((url, idx) => {
         if(url.trim().startsWith('http')) {
-          // 💡 修正：加上 contenteditable="false" 與 onclick="window.open(...)" 確保可以被點擊
           videoButtonsHtml += `<button contenteditable="false" onclick="window.open('${url.trim()}', '_blank')" class="btn-outline" style="display:inline-flex; margin-right:8px; margin-bottom:8px; cursor:pointer;"><i data-lucide="video" style="width:16px;"></i> 影片 ${idx + 1}</button>`;
         }
       });
@@ -752,7 +743,6 @@
     document.getElementById('finalSummary').innerHTML = finalContent;
     document.getElementById('fullDetails').innerHTML = formattedDetails;
     
-    // 重新渲染新加入的 icon
     lucide.createIcons();
     saveState({ step: 'step-result', meetingData: meetingData });
   }
@@ -831,11 +821,10 @@
     }
   }
 
-  // 🌟 修正點 1：加固任務佇列，確保最後一個區段被「完美攔截並上傳」
+  // 🌟 完美保留！你的雙軌並行處理機制原封不動
   function processAndUploadChunk(blob, mimeType, currentIndex) {
     log(`[傳輸] 區段 ${currentIndex} 雙軌並行處理中...`);
     
-    // 確保任務在建立的瞬間，就立即加入等待隊列，杜絕時間差漏洞
     const taskPromise = new Promise((resolve) => {
       const reader = new FileReader();
       reader.readAsDataURL(blob);
@@ -851,17 +840,15 @@
         } catch (err) {
           log(`[錯誤] 區段 ${currentIndex} 處理異常：${err.message}`);
         } finally {
-          resolve(); // 確保無論成功或失敗，任務都會解除鎖定，不會卡死系統
+          resolve(); 
         }
       };
     });
 
-    // 將這個上傳任務放入「嚴格等待清單」中
     activeProcessingTasks.add(taskPromise);
     taskPromise.then(() => activeProcessingTasks.delete(taskPromise));
   }
 
-  // 🌟 修正點 2：強化停止邏輯，強迫系統「嚴格等待」所有辨識完成才能總結
   async function stopMeeting() {
     isRecording = false; 
     isPaused = false;
@@ -872,13 +859,11 @@
     document.getElementById('playerControls').style.display = 'none';
     log("[系統] 正在提取最終區段資料，準備進行結尾處理...");
 
-    // 1. 給予緩衝時間，確保最後一個錄影切片 100% 觸發 processAndUploadChunk
     const onStopPromise = new Promise(resolve => {
       if (mediaRecorder && (mediaRecorder.state === "recording" || mediaRecorder.state === "paused")) {
         const originalOnStop = mediaRecorder.onstop;
         mediaRecorder.onstop = (e) => { 
           if(originalOnStop) originalOnStop(e); 
-          // 延遲 500 毫秒，確保 FileReader 已經啟動且任務確實加入 activeProcessingTasks
           setTimeout(() => resolve(), 500); 
         };
         mediaRecorder.stop(); 
@@ -890,18 +875,15 @@
     await onStopPromise;
     if (currentStream) currentStream.getTracks().forEach(track => track.stop());
 
-    // 2. 使用安全迴圈：只要佇列裡還有上傳/辨識任務，就嚴格封鎖，絕對不允許偷跑！
     if (activeProcessingTasks.size > 0) {
       log(`[鎖定] 嚴格等待最後 ${activeProcessingTasks.size} 筆背景任務完成寫入，請稍候...`);
       while(activeProcessingTasks.size > 0) {
-        // 強制等待目前所有的 Promise 完成
         await Promise.all(Array.from(activeProcessingTasks));
       }
     }
 
     log("[系統] 所有區段均已完美建檔與寫入！呼叫 AI 進行最終會議總結...");
     
-    // 3. 所有資料都確實寫入 Google Sheet 後，才呼叫頂級商務紀錄師產出重點
     try {
       const res = await callGasAPI({ action: "finalizeMeeting", rowIndex: meetingData.rowIndex, email: document.getElementById('setupEmail').value });
       if (res.status === 'success') {
@@ -950,17 +932,13 @@
     lucide.createIcons();
     
     const summaryText = document.getElementById('finalSummary').innerText;
-    
-    // 🌟 從我們安全的背景記憶體抓取最原始、最完整的逐字稿與網址，杜絕隱藏標籤導致遺失！
     let detailsText = window.rawMeetingDetails || document.getElementById('fullDetails').innerText;
     
-    // 🌟 在送出給 Google Doc 之前，徹底剝除所有的 Markdown 符號
     detailsText = detailsText
-      .replace(/\*\*(.*?)\*\*/g, "$1") // 剝除粗體星號
-      .replace(/###\s*(.*?)(?=\n|$)/g, "$1") // 剝除標題井號
-      .replace(/^\*\s+(.*)/gm, "• $1"); // 把單星號換成漂亮的圓點清單
+      .replace(/\*\*(.*?)\*\*/g, "$1") 
+      .replace(/###\s*(.*?)(?=\n|$)/g, "$1") 
+      .replace(/^\*\s+(.*)/gm, "• $1"); 
       
-    // 🌟 確保將最原始的未被隱藏的影片 URL 放回文件底部
     detailsText += "\n\n【雲端影音檔案連結】\n" + (window.rawVideoUrls || "無紀錄");
     
     try {
