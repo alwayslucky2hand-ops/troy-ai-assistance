@@ -437,26 +437,50 @@
   }
 
   // 1️⃣ 修改：強制降低攝影機與螢幕分享的解析度為 240p
+  // 1️⃣ 修改：全方位智慧設備與螢幕分享捕捉引擎
   async function acquireStream() {
-    if (currentStream) currentStream.getTracks().forEach(track => track.stop());
-    const constraints = { audio: true };
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => track.stop());
+      // 確保硬體有足夠時間釋放資源
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
     try {
       if (isMobile) {
-        // 手機版：設定為極低解析度 (約 240p)
-        constraints.video = { facingMode: mobileFacingMode, width: { ideal: 426 }, height: { ideal: 240 } };
+        // 📱 【手機模式】：支援前後鏡頭安全切換
+        const constraints = { 
+          audio: true,
+          video: { facingMode: mobileFacingMode === "user" ? "user" : { exact: "environment" } } 
+        };
         currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        
       } else {
         if (desktopSource === "camera") {
-          // 電腦鏡頭：設定為 240p (426x240)
-          constraints.video = { width: { ideal: 426 }, height: { ideal: 240 } };
+          // 💻 【電腦鏡頭模式】：一般視訊會議
+          const constraints = { audio: true, video: { width: { ideal: 1280 } } }; 
           currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+          
         } else {
-          // 螢幕分享：同樣限制畫面大小
-          currentStream = await navigator.mediaDevices.getDisplayMedia({ 
-            video: { width: { ideal: 854 }, height: { ideal: 480 } }, // 螢幕分享保留稍微大一點點(480p)以防文字糊掉，但仍比之前小很多
-            audio: true 
+          // 🖥️ 【電腦螢幕分享模式】：極致優化版 (高清晰文字 + 必備麥克風)
+          
+          // 步驟 A：抓取螢幕畫面 (設定低幀率 5fps，大幅降低檔案大小，但保留高解析度文字)
+          const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+            video: { frameRate: { ideal: 5, max: 10 } },
+            audio: true // 允許抓取系統音訊(如影片聲音)
           });
-          currentStream.getVideoTracks()[0].onended = () => {
+          
+          // 步驟 B：強制抓取麥克風聲音 (非常重要！確保講話的聲音被錄進去)
+          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          
+          // 步驟 C：將「螢幕影像」與「麥克風聲音」完美合併
+          const tracks = [
+            ...screenStream.getVideoTracks(),
+            ...micStream.getAudioTracks()
+          ];
+          currentStream = new MediaStream(tracks);
+
+          // 監聽使用者按下「停止共用」的系統按鈕
+          screenStream.getVideoTracks()[0].onended = () => {
             if (isRecording) {
               log("[系統] 畫面分享中斷，切回視訊鏡頭");
               desktopSource = "camera";
@@ -467,26 +491,31 @@
           };
         }
       }
+      
       mediaPlayer.srcObject = currentStream;
       mediaPlayer.muted = true; 
       const videoTrack = currentStream.getVideoTracks()[0];
       if (videoTrack) videoTrack.enabled = isVideoEnabled; 
     } catch (err) {
-      throw err;
+      console.error(err);
+      throw err; 
     }
   }
 
-  // 2️⃣ 修改：加入超低位元率 (Bitrate) 壓縮設定，讓檔案極度輕量化
+  // 2️⃣ 修改：動態智慧位元率 (Bitrate) 控制
   function startChunkRecording() {
     if (!isRecording || !currentStream || isPaused) return; 
     let recordedChunks = [];
     const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
     
-    // 🌟 關鍵優化：設定超低位元率，大幅縮小每分鐘的檔案體積
+    // 🌟 智慧動態位元率判斷
+    // 如果是電腦螢幕分享，因為需要看清楚「文字」，給予較高位元率 (搭配前面的 5fps，檔案依然很小，傳輸依然極快！)
+    // 如果是一般鏡頭，只需看清楚「人臉與動作」，使用超低位元率 (250kbps) 節省頻寬
+    const isScreenSharing = (!isMobile && desktopSource === "screen");
     const options = { 
       mimeType: mimeType,
-      videoBitsPerSecond: 250000, // 影像位元率降至 250 kbps (非常輕量，專供 AI 辨識)
-      audioBitsPerSecond: 64000   // 聲音位元率降至 64 kbps (足以清楚辨識人聲逐字稿)
+      videoBitsPerSecond: isScreenSharing ? 800000 : 250000, 
+      audioBitsPerSecond: 64000  
     };
     
     mediaRecorder = new MediaRecorder(currentStream, options);
