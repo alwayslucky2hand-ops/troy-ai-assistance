@@ -436,8 +436,7 @@
     if (wakeLock !== null) wakeLock.release().then(() => { wakeLock = null; });
   }
 
-  // 1️⃣ 修改：強制降低攝影機與螢幕分享的解析度為 240p
-  // 1️⃣ 修改：全方位智慧設備與螢幕分享捕捉引擎
+  // 1️⃣ 修改：【防彈級】全方位智慧設備與螢幕分享捕捉引擎
   async function acquireStream() {
     if (currentStream) {
       currentStream.getTracks().forEach(track => track.stop());
@@ -462,47 +461,133 @@
           
         } else {
           // 🖥️ 【電腦螢幕分享模式】：極致優化版 (高清晰文字 + 必備麥克風)
-          
-          // 步驟 A：抓取螢幕畫面 (設定低幀率 5fps，大幅降低檔案大小，但保留高解析度文字)
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+            throw new Error("您的瀏覽器不支援螢幕分享功能");
+          }
+
+          // 步驟 A：抓取螢幕畫面
           const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
             video: { frameRate: { ideal: 5, max: 10 } },
-            audio: true // 允許抓取系統音訊(如影片聲音)
+            audio: true 
           });
           
-          // 步驟 B：強制抓取麥克風聲音 (非常重要！確保講話的聲音被錄進去)
-          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          // 步驟 B：嘗試抓取麥克風聲音 (加上安全捕捉，若無麥克風也不會死當)
+          let micStream;
+          try {
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          } catch (micErr) {
+            log("[警告] 無法抓取麥克風聲音，將僅錄製畫面與系統音訊");
+          }
           
-          // 步驟 C：將「螢幕影像」與「麥克風聲音」完美合併
-          const tracks = [
-            ...screenStream.getVideoTracks(),
-            ...micStream.getAudioTracks()
-          ];
+          // 步驟 C：安全地將「螢幕影像」與「麥克風聲音」合併
+          const tracks = [];
+          if (screenStream && typeof screenStream.getVideoTracks === 'function') {
+            tracks.push(...screenStream.getVideoTracks());
+          }
+          if (screenStream && typeof screenStream.getAudioTracks === 'function') {
+            tracks.push(...screenStream.getAudioTracks());
+          }
+          if (micStream && typeof micStream.getAudioTracks === 'function') {
+            tracks.push(...micStream.getAudioTracks());
+          }
+          
           currentStream = new MediaStream(tracks);
 
-          // 監聽使用者按下「停止共用」的系統按鈕
-          screenStream.getVideoTracks()[0].onended = () => {
-            if (isRecording) {
-              log("[系統] 畫面分享中斷，切回視訊鏡頭");
-              desktopSource = "camera";
-              document.getElementById('icon-source').setAttribute('data-lucide', 'monitor');
-              lucide.createIcons();
-              acquireStream().then(() => { if (isRecording && !isPaused) startChunkRecording(); });
+          // 安全監聽使用者按下「停止共用」的系統按鈕
+          if (screenStream && typeof screenStream.getVideoTracks === 'function') {
+            const screenVideoTracks = screenStream.getVideoTracks();
+            if (screenVideoTracks && screenVideoTracks.length > 0) {
+              screenVideoTracks[0].onended = () => {
+                if (isRecording) {
+                  log("[系統] 畫面分享中斷，切回視訊鏡頭");
+                  desktopSource = "camera";
+                  document.getElementById('icon-source').setAttribute('data-lucide', 'monitor');
+                  lucide.createIcons();
+                  acquireStream().then(() => { if (isRecording && !isPaused) startChunkRecording(); });
+                }
+              };
             }
-          };
+          }
         }
       }
       
+      // 確保最終真的有取得串流
+      if (!currentStream) {
+        throw new Error("無法建立影音串流");
+      }
+
       mediaPlayer.srcObject = currentStream;
       mediaPlayer.muted = true; 
-      const videoTrack = currentStream.getVideoTracks()[0];
-      if (videoTrack) videoTrack.enabled = isVideoEnabled; 
+
+      // 步驟 D：最嚴格的防護，確保有軌道才控制畫面開關
+      if (typeof currentStream.getVideoTracks === 'function') {
+        const videoTracks = currentStream.getVideoTracks();
+        if (videoTracks && videoTracks.length > 0) {
+          videoTracks[0].enabled = isVideoEnabled;
+        }
+      }
     } catch (err) {
       console.error(err);
-      throw err; 
+      throw err; // 將錯誤往上丟給切換按鈕處理
     }
   }
 
-  // 2️⃣ 修改：動態智慧位元率 (Bitrate) 控制
+  // 2️⃣ 修改：【加固版】切換邏輯，即使切換失敗也能安全退回原畫面
+  async function switchSourceAction() {
+    const wasRecording = isRecording;
+    if (wasRecording && mediaRecorder && mediaRecorder.state === "recording") {
+      log("[系統] 正在切換畫面...");
+      mediaRecorder.stop(); 
+      clearTimeout(chunkInterval);
+    }
+    
+    // 記憶切換前的狀態，以防萬一失敗可以復原
+    const prevMobileFacing = mobileFacingMode;
+    const prevDesktopSource = desktopSource;
+
+    if (isMobile) {
+      mobileFacingMode = (mobileFacingMode === "user") ? "environment" : "user";
+    } else {
+      desktopSource = (desktopSource === "camera") ? "screen" : "camera";
+    }
+
+    try {
+      await acquireStream();
+      
+      // 成功切換後，更新電腦版的按鈕圖示
+      if (!isMobile) {
+        const iconSource = document.getElementById('icon-source');
+        iconSource.setAttribute('data-lucide', desktopSource === "screen" ? 'camera' : 'monitor');
+        lucide.createIcons();
+      }
+
+      if (wasRecording && !isPaused) {
+        log("[成功] 畫面切換完成，繼續錄製");
+        startChunkRecording();
+      }
+    } catch (e) {
+      // 🌟 關鍵修復：如果切換失敗，安全退回上一個狀態，絕不當機！
+      log("[錯誤] 切換失敗，將維持原畫面：" + (e.message || "未知錯誤"));
+      mobileFacingMode = prevMobileFacing;
+      desktopSource = prevDesktopSource;
+      
+      try {
+        await acquireStream(); // 重新開啟原本的畫面
+        
+        if (!isMobile) {
+          const iconSource = document.getElementById('icon-source');
+          iconSource.setAttribute('data-lucide', desktopSource === "screen" ? 'camera' : 'monitor');
+          lucide.createIcons();
+        }
+
+        if (wasRecording && !isPaused) startChunkRecording();
+      } catch(err) {
+        log("[錯誤] 無法恢復畫面，請檢查硬體或重整網頁。");
+      }
+    }
+  }
+
+  // 3️⃣ 保留：動態智慧位元率 (Bitrate) 控制
   function startChunkRecording() {
     if (!isRecording || !currentStream || isPaused) return; 
     let recordedChunks = [];
@@ -538,19 +623,22 @@
 
   function toggleVideo() {
     if (currentStream) {
-      const videoTrack = currentStream.getVideoTracks()[0];
-      if (videoTrack) {
-        isVideoEnabled = !isVideoEnabled;
-        videoTrack.enabled = isVideoEnabled;
-        const iconEl = document.getElementById('icon-video');
-        if (isVideoEnabled) {
-          iconEl.setAttribute('data-lucide', 'video');
-          log("[資訊] 已開啟畫面預覽");
-        } else {
-          iconEl.setAttribute('data-lucide', 'video-off');
-          log("[資訊] 畫面已關閉，純語音模式");
+      // 安全地檢查是否真的有軌道，不再報錯死機
+      if (typeof currentStream.getVideoTracks === 'function') {
+        const videoTracks = currentStream.getVideoTracks();
+        if (videoTracks && videoTracks.length > 0) {
+          isVideoEnabled = !isVideoEnabled;
+          videoTracks[0].enabled = isVideoEnabled;
+          const iconEl = document.getElementById('icon-video');
+          if (isVideoEnabled) {
+            iconEl.setAttribute('data-lucide', 'video');
+            log("[資訊] 已開啟畫面預覽");
+          } else {
+            iconEl.setAttribute('data-lucide', 'video-off');
+            log("[資訊] 畫面已關閉，純語音模式");
+          }
+          lucide.createIcons();
         }
-        lucide.createIcons();
       }
     }
   }
@@ -740,28 +828,6 @@
       recBadge.style.background = "rgba(255, 59, 48, 0.95)";
       document.getElementById('recText').innerText = "REC";
     }
-  }
-
-  function startChunkRecording() {
-    if (!isRecording || !currentStream || isPaused) return; 
-    let recordedChunks = [];
-    const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
-    mediaRecorder = new MediaRecorder(currentStream, { mimeType: mimeType });
-    
-    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
-    mediaRecorder.onstop = () => {
-      if (recordedChunks.length > 0) {
-        const blob = new Blob(recordedChunks, { type: mimeType });
-        processAndUploadChunk(blob, mimeType, chunkIndex);
-        chunkIndex++;
-      }
-      if (isRecording && !isPaused) startChunkRecording(); 
-    };
-
-    try {
-      mediaRecorder.start();
-      chunkInterval = setTimeout(() => { if (mediaRecorder.state === "recording") mediaRecorder.stop(); }, 60000); 
-    } catch (err) {}
   }
 
   // 🌟 修正點 1：加固任務佇列，確保最後一個區段被「完美攔截並上傳」
