@@ -739,7 +739,8 @@
       const urls = videoUrls.split(/,\s*|\n+/);
       urls.forEach((url, idx) => {
         if(url.trim().startsWith('http')) {
-          videoButtonsHtml += `<a href="${url.trim()}" target="_blank" class="btn-outline" style="display:inline-flex; margin-right:8px; margin-bottom:8px; text-decoration:none;"><i data-lucide="video" style="width:16px;"></i> 影片 ${idx + 1}</a>`;
+          // 💡 修正：加上 contenteditable="false" 與 onclick="window.open(...)" 確保可以被點擊
+          videoButtonsHtml += `<button contenteditable="false" onclick="window.open('${url.trim()}', '_blank')" class="btn-outline" style="display:inline-flex; margin-right:8px; margin-bottom:8px; cursor:pointer;"><i data-lucide="video" style="width:16px;"></i> 影片 ${idx + 1}</button>`;
         }
       });
     } else {
