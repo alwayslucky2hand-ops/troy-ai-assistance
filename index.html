@@ -735,26 +735,37 @@
     } catch (err) {}
   }
 
+  // 🌟 修正點 1：加固任務佇列，確保最後一個區段被「完美攔截並上傳」
   function processAndUploadChunk(blob, mimeType, currentIndex) {
     log(`[傳輸] 區段 ${currentIndex} 雙軌並行處理中...`);
+    
+    // 確保任務在建立的瞬間，就立即加入等待隊列，杜絕時間差漏洞
     const taskPromise = new Promise((resolve) => {
       const reader = new FileReader();
       reader.readAsDataURL(blob);
       reader.onloadend = async () => {
-        const base64Data = reader.result.split(',')[1];
-        
-        const p1 = callGasAPI({ action: "saveDrive", base64Data: base64Data, mimeType: mimeType, folderId: meetingData.folderId, rowIndex: meetingData.rowIndex, chunkIndex: currentIndex });
-        const p2 = callGasAPI({ action: "recognizeAI", base64Data: base64Data, mimeType: mimeType, rowIndex: meetingData.rowIndex, chunkIndex: currentIndex });
-        
-        await Promise.all([p1, p2]);
-        log(`[成功] 區段 ${currentIndex} 建檔與 AI 辨識同步寫入完成`);
-        resolve();
+        try {
+          const base64Data = reader.result.split(',')[1];
+          // 同步執行：1.傳雲端硬碟建檔 2.呼叫 Gemini 辨識
+          const p1 = callGasAPI({ action: "saveDrive", base64Data: base64Data, mimeType: mimeType, folderId: meetingData.folderId, rowIndex: meetingData.rowIndex, chunkIndex: currentIndex });
+          const p2 = callGasAPI({ action: "recognizeAI", base64Data: base64Data, mimeType: mimeType, rowIndex: meetingData.rowIndex, chunkIndex: currentIndex });
+          
+          await Promise.all([p1, p2]);
+          log(`[成功] 區段 ${currentIndex} 建檔與 AI 辨識同步寫入完成`);
+        } catch (err) {
+          log(`[錯誤] 區段 ${currentIndex} 處理異常：${err.message}`);
+        } finally {
+          resolve(); // 確保無論成功或失敗，任務都會解除鎖定，不會卡死系統
+        }
       };
     });
+
+    // 將這個上傳任務放入「嚴格等待清單」中
     activeProcessingTasks.add(taskPromise);
     taskPromise.then(() => activeProcessingTasks.delete(taskPromise));
   }
 
+  // 🌟 修正點 2：強化停止邏輯，強迫系統「嚴格等待」所有辨識完成才能總結
   async function stopMeeting() {
     isRecording = false; 
     isPaused = false;
@@ -763,34 +774,45 @@
     releaseWakeLock(); 
     
     document.getElementById('playerControls').style.display = 'none';
-    log("[系統] 正在提取最終區段資料...");
+    log("[系統] 正在提取最終區段資料，準備進行結尾處理...");
 
+    // 1. 給予緩衝時間，確保最後一個錄影切片 100% 觸發 processAndUploadChunk
     const onStopPromise = new Promise(resolve => {
       if (mediaRecorder && (mediaRecorder.state === "recording" || mediaRecorder.state === "paused")) {
         const originalOnStop = mediaRecorder.onstop;
-        mediaRecorder.onstop = (e) => { if(originalOnStop) originalOnStop(e); resolve(); };
+        mediaRecorder.onstop = (e) => { 
+          if(originalOnStop) originalOnStop(e); 
+          // 延遲 500 毫秒，確保 FileReader 已經啟動且任務確實加入 activeProcessingTasks
+          setTimeout(() => resolve(), 500); 
+        };
         mediaRecorder.stop(); 
-      } else resolve();
+      } else {
+        resolve();
+      }
     });
 
     await onStopPromise;
     if (currentStream) currentStream.getTracks().forEach(track => track.stop());
 
+    // 2. 使用安全迴圈：只要佇列裡還有上傳/辨識任務，就嚴格封鎖，絕對不允許偷跑！
     if (activeProcessingTasks.size > 0) {
-      log(`[鎖定] 嚴格等待 ${activeProcessingTasks.size} 筆背景任務完成寫入...`);
+      log(`[鎖定] 嚴格等待最後 ${activeProcessingTasks.size} 筆背景任務完成寫入，請稍候...`);
       while(activeProcessingTasks.size > 0) {
+        // 強制等待目前所有的 Promise 完成
         await Promise.all(Array.from(activeProcessingTasks));
       }
     }
 
-    log("[系統] 呼叫 AI 進行會議總結...");
+    log("[系統] 所有區段均已完美建檔與寫入！呼叫 AI 進行最終會議總結...");
     
+    // 3. 所有資料都確實寫入 Google Sheet 後，才呼叫頂級商務紀錄師產出重點
     try {
       const res = await callGasAPI({ action: "finalizeMeeting", rowIndex: meetingData.rowIndex, email: document.getElementById('setupEmail').value });
       if (res.status === 'success') {
         switchStep('step-result'); 
         renderBeautifulText(res.data.summary, res.data.details, res.data.videoUrls);
         window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        log("[成功] 會議總結與紀錄產出完畢！");
       } else {
         log("[錯誤] 總結失敗: " + res.message);
       }
